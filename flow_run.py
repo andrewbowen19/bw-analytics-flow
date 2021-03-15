@@ -109,7 +109,7 @@ def update_network_level():
 
     print(f'Container & DB: {container}, {database}')
     data_dict = {"id": network_id, "category": "networklevel",
-                    "collection_podcasts": dat['collection'],
+                    "collection_podcasts": str([{'Title': p['title'], 'id': p['id']} for p in dat['collection']]),
                     "exportdate": today.strftime("%Y-%m-%d")}
 
     dict2string = json.dumps(data_dict)
@@ -135,51 +135,70 @@ def update_podcast_level():
     key_vaue = "podcastlevel"
     container_name = 'simplecastdb'
 
-    # Inserting data for each pod
-    for p in pod_ids:
-        # Setting up db and container connection
-        database = client.get_database_client(db_id)
-        container = database.get_container_client(container_name)
+    log_path = os.path.join('.', 'logs', f'flow-run-{today}-log.txt')
+    with open(log_path, 'w') as f:
+        f.write(f'DB update executed: {today}\n')
 
-
-        doc_id = str(uuid.uuid4())
-        title = p['label']
-        p_id = p['value']
-        print(f'Getting Simplecast data for {title} | ({p_id})')
-        episodes = getSimplecastResponse(f'/podcasts/{p_id}/episodes?limit=1000')
-        downloads = getSimplecastResponse(f'/analytics/downloads?podcast={p_id}')
-        listeners = getSimplecastResponse(f'/analytics/listeners?podcast={p_id}')
-
-        data_dict = {"id": doc_id, "category": "podcastlevel",
-                    "podcastid": p_id,
-                    "collection_podcastanalytics": str(downloads['by_interval']),
-                    "collection_podcastuniquelisteners" : str(listeners['by_interval']),
-                    "collection_episodes": str(episodes['collection']),
-                    "exportdate": today.strftime("%Y-%m-%d")}
-        dict2string = json.dumps(data_dict)
-        print(f'Inserting data in doc ID {doc_id}')
-        insert_data = container.upsert_item(data_dict)
-
-        # Adding episode-level data
-        for ep in episodes['collection']:
+        # Inserting data for each pod
+        pods_updated = []
+        for p in pod_ids:
+            # Setting up db and container connection
             database = client.get_database_client(db_id)
             container = database.get_container_client(container_name)
-            ep_doc_id = str(uuid.uuid4())
-            episode_id = ep['id']
-            print(f'Uploading data for {episode_id} ...')
-            ep_downloads = getSimplecastResponse(f'/analytics/downloads?episode={episode_id}')
-            ep_listeners = getSimplecastResponse(f'/analytics/listeners?episode={episode_id}')
-            data_dict = {"id": ep_doc_id, "category": "episodelevel",
-                        "episodeid": ep_doc_id,
-                        "collection_episodeanalytics": str(ep_downloads['by_interval']),
-                        "collection_episodeuniquelisteners" : str(ep_listeners['by_interval']),
-                        "exportdate": today.strftime("%Y-%m-%d")}
-            
-            container.upsert_item(data_dict)
 
-        print('Data inserted, on to the next!\n')
-        time.sleep(10)
-        print('###################')
+
+            doc_id = str(uuid.uuid4())
+            title = p['label']
+            p_id = p['value']
+            pods_updated.append(p_id)
+            print(f'Getting Simplecast data for {title} | ({p_id})')
+            episodes = getSimplecastResponse(f'/podcasts/{p_id}/episodes?limit=1000')
+            downloads = getSimplecastResponse(f'/analytics/downloads?podcast={p_id}')
+            listeners = getSimplecastResponse(f'/analytics/listeners?podcast={p_id}')
+
+            data_dict = {"id": doc_id, "category": "podcastlevel",
+                        "podcastid": p_id,
+                        "collection_podcastanalytics": str(downloads['by_interval']),
+                        "collection_podcastuniquelisteners" : str(listeners['by_interval']),
+                        "collection_episodes": str(episodes['collection']),
+                        "exportdate": today.strftime("%Y-%m-%d")}
+            dict2string = json.dumps(data_dict)
+            print(f'Inserting data in podcast level doc: {doc_id}')
+            insert_data = container.upsert_item(data_dict)
+
+            # Adding episode-level data
+            episodes_updated = []
+            for ep in episodes['collection']:
+                database = client.get_database_client(db_id)
+                container = database.get_container_client(container_name)
+                ep_doc_id = str(uuid.uuid4())
+                episode_id = ep['id']
+                episodes_updated.append(episode_id)
+                print(f'Uploading data for episode {episode_id}')
+                ep_downloads = getSimplecastResponse(f'/analytics/downloads?episode={episode_id}')
+                ep_listeners = getSimplecastResponse(f'/analytics/listeners?episode={episode_id}')
+                
+                if len(ep_listeners) > 0 and len(ep_downloads) > 0:
+                    data_dict = {"id": ep_doc_id, "category": "episodelevel",
+                            "episodeid": ep_doc_id,
+                            "collection_episodeanalytics": str(ep_downloads['by_interval']),
+                            "collection_episodeuniquelisteners" : str(ep_listeners['by_interval']),
+                            "exportdate": today.strftime("%Y-%m-%d")}
+                    container.upsert_item(data_dict)
+                else:
+                    print('No episodes detected, moving to next episode')
+
+            print('Data inserted, on to the next!\n')
+            print('################################')
+
+            # Writing pod and episode ids to logs
+            f.write('----------------------------------------')
+            f.write(f'Podcasts upserted {pods_updated}\n')
+            f.write(f'Podcasts upserted {episodes_updated}\n')
+
+
+            time.sleep(10)
+        
 
 
     
